@@ -1,0 +1,148 @@
+---
+title: 'Gastos, fuente: BROU'
+author: "Esteban Cardoso"
+date: "10/7/2023"
+output: pdf_document
+---
+  
+```{r include=FALSE}
+library(rmarkdown)
+library(tidyverse)
+library(dplyr)
+library(knitr)
+library(janitor)
+library(readxl)
+library(lubridate)
+library(openxlsx)
+library(kableExtra)
+library(cronR)
+library(shinyFiles)
+library(shiny)
+library(chron)
+```
+
+```{r setup, include=FALSE}
+# seteo cifras despues de la coma
+
+options(digits = 2)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r warning=FALSE, include=FALSE}
+# Seteo
+
+setwd("/linuxdata/home/esteban/Descargas")
+df <- read_xls("Detalle_Movimiento_Cuenta (1).xls", skip = 17) %>% select(-c(...3, "Crédito", "Número de documento")) %>% clean_names()
+```
+
+```{r}
+# Renombro las columnas 
+
+colnames(df) <- c("fecha" ,"descripcion", "asunto", "canal", "monto")
+
+# Eliminar filas con NA
+
+df <- df %>% filter(is.na(fecha) == FALSE & is.na(monto) == FALSE & is.na(asunto)) %>% select(-asunto)
+```
+
+```{r}
+# Convierto correctamente la fecha
+
+df$fecha <- convertToDateTime(df$fecha)
+
+# Genero mes a partir de fecha
+
+df$mes <- as.numeric(format(df$fecha, "%m")) 
+```
+
+```{r}
+# Limpieza de las variables
+
+df$descripcion <- gsub("[^[:alnum:]]", " ", df$descripcion)
+
+df <- df %>% mutate(descripcion = tolower(descripcion), canal = tolower(canal), canal = tolower(canal))
+
+df$descripcion <- gsub("comercio", "", df$descripcion)
+
+df <- df %>% mutate(descripcion = str_squish(descripcion))
+```
+
+```{r}
+# Divido entre dos los gastos compartidos, facturas, comestibles
+
+df1 <- df %>% filter(grepl('redpagos pagos|ute|trib|multiservice|portisur', descripcion)) %>% mutate(monto = monto/2)
+
+# Quito estos gastos 
+
+df <- df %>% filter(!grepl('redpagos pagos|ute|trib|multiservice|portisur', descripcion))
+
+# Los agrego corregidos
+
+df <- rbind(df1, df) %>% arrange((fecha))
+```
+
+```{r}
+# creacion de categorias con mas opciones AGREGAR CATEGORÍAS A MEDIDA QUE VAYA COMPRANDO EN OTROS LUGARES
+
+df <- df %>% mutate(categorias = case_when(grepl("saneamiento|ute|antel|pago servicios antel celular|pago servicios im trib domicil|redpagos pagos factu|pago servicios bps|banco de prevision social", descripcion) ~ "facturas",
+                                           grepl("stm", descripcion) ~ "transporte",
+                                           grepl("transferencia spi enviada|retiro red abitab", descripcion) ~ "transferencias / pagos en efectivo",
+                                           grepl("farmacia|clave 3|del conde original", descripcion) ~ "otros",
+                                           TRUE ~ "comida"))
+```
+
+```{r}
+# Generar una subcategoria mas especifica para ver con mejor precision los gastos
+
+df <- df %>% mutate(categorias = case_when(grepl("saneamiento|ute|antel|pago servicios antel celular|pago servicios im trib domicil|redpagos pagos factu|pago servicios bps|banco de prevision social", descripcion) ~ "facturas",
+                                           grepl("stm", descripcion) ~ "transporte",
+                                           grepl("transferencia spi enviada|retiro red abitab", descripcion) ~ "transferencias / pagos en efectivo",
+                                           grepl("farmacia|clave 3|del conde original", descripcion) ~ "otros",
+                                           TRUE ~ "comida"))
+```
+
+
+
+## Visualizaciones
+
+### Monto total gastado en el mes
+```{r include=TRUE}
+kable(df %>% summarise(sum(monto)), caption = "Monto total del mes") %>% kable_styling(latex_options="HOLD_position")
+```
+<br>
+  <br>
+  
+  ### Gastos menusales por categoría ordenado de mayor a menor
+```{r include=TRUE}
+# Suma por descripcion
+
+kable(df %>% group_by(categorias) %>% summarise(monto = sum(monto)) %>%  mutate(Porcentaje = monto/sum(monto)*100) %>%  arrange(desc(monto)), caption = "Gastos mensuales por categorías") %>% kable_styling(latex_options="HOLD_position")
+```
+
+### Representación gráfica
+```{r include=TRUE}
+df %>% group_by(categorias) %>% summarise(Monto = sum(monto)) %>% ggplot(aes(x = categorias, y = Monto, fill = categorias)) + geom_col() + 
+  theme(axis.text.x = element_text(angle = 90)) + labs(title = "Gasto por tipo de gasto", x="Monto", y="Tipo de Gasto") +   geom_text(aes(label=Monto), position=position_dodge(width=0.9), vjust=-0.10)
+```
+
+### Los 4 mayores gastos
+```{r include=TRUE}
+kable(df %>% select("Tipo de gasto"=descripcion, categorias, monto) %>% slice_max(monto, n=4), caption = "Los 4 gastos de mayor monto") %>% kable_styling(latex_options="HOLD_position")
+```
+
+\newpage
+
+## Análisis acumulado (el análisis acumulado con RRAA del BROU comienza en julio)
+
+```{r}
+# cargo el df anual (a partir de junio se calcula con RRAA del BROU, por lo que se aumenta la precisión)
+
+load("gastos_2023.Rdata")
+```
+
+```{r}
+# agrego el mes a gastos_2023
+
+rbind(df_2023, df)
+```
+
