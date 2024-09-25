@@ -1,12 +1,11 @@
 ---
 title: 'Gastos, fuente: BROU'
 author: "Esteban Cardoso"
-date: "10/7/2023"
+date: "`r Sys.Date()`"
 output: pdf_document
 ---
   
 ```{r include=FALSE}
-library(rmarkdown)
 library(tidyverse)
 library(dplyr)
 library(knitr)
@@ -15,7 +14,6 @@ library(readxl)
 library(lubridate)
 library(openxlsx)
 library(kableExtra)
-library(cronR)
 library(shinyFiles)
 library(shiny)
 library(chron)
@@ -31,8 +29,8 @@ knitr::opts_chunk$set(echo = FALSE)
 ```{r warning=FALSE, include=FALSE}
 # Seteo
 
-setwd("/linuxdata/home/esteban/Descargas")
-df <- read_xls("Detalle_Movimiento_Cuenta (1).xls", skip = 17) %>% select(-c(...3, "Crédito", "Número de documento")) %>% clean_names()
+setwd("C:/Users/PC/Desktop/R scripts/gastos/2024/gastos_mensuales")
+df <- read_xls("08_2024.xls", skip = 17) %>% select(-c(...3, "Crédito", "Número de documento")) %>% clean_names()
 ```
 
 ```{r}
@@ -68,18 +66,18 @@ df <- df %>% mutate(descripcion = str_squish(descripcion))
 ```
 
 ```{r}
-# Divido entre dos los gastos compartidos, facturas, comestibles
+# Renombro FONASA y jubilatorio (pago mensual)
 
-df1 <- df %>% filter(grepl('redpagos pagos|ute|trib|multiservice|portisur', descripcion)) %>% mutate(monto = monto/2)
+library(stringr)
+df$descripcion <- str_replace(df$descripcion, "pago servicios bps", "Fonasa")
 
-# Quito estos gastos 
+df$descripcion <- str_replace(df$descripcion, 'pago servicios banco de prevision social','Jubilatorio')
 
-df <- df %>% filter(!grepl('redpagos pagos|ute|trib|multiservice|portisur', descripcion))
+# Luego elimino ambas filas ya que no son gastos propiamente dichos
 
-# Los agrego corregidos
-
-df <- rbind(df1, df) %>% arrange((fecha))
+df <- df %>% filter(!(descripcion %in% c('Fonasa','Jubilatorio')))
 ```
+
 
 ```{r}
 # creacion de categorias con mas opciones AGREGAR CATEGORÍAS A MEDIDA QUE VAYA COMPRANDO EN OTROS LUGARES
@@ -87,32 +85,35 @@ df <- rbind(df1, df) %>% arrange((fecha))
 df <- df %>% mutate(categorias = case_when(grepl("saneamiento|ute|antel|pago servicios antel celular|pago servicios im trib domicil|redpagos pagos factu|pago servicios bps|banco de prevision social", descripcion) ~ "facturas",
                                            grepl("stm", descripcion) ~ "transporte",
                                            grepl("transferencia spi enviada|retiro red abitab", descripcion) ~ "transferencias / pagos en efectivo",
-                                           grepl("farmacia|clave 3|del conde original", descripcion) ~ "otros",
+                                           grepl("farmacia|clave 3|del conde original|retiro red redbrou", descripcion) ~ "otros",
                                            TRUE ~ "comida"))
 ```
 
 ```{r}
 # Generar una subcategoria mas especifica para ver con mejor precision los gastos
 
-df <- df %>% mutate(categorias = case_when(grepl("saneamiento|ute|antel|pago servicios antel celular|pago servicios im trib domicil|redpagos pagos factu|pago servicios bps|banco de prevision social", descripcion) ~ "facturas",
+df <- df %>% mutate(sub_categoria = case_when(grepl("saneamiento|ute|antel|pago servicios antel celular|pago servicios im trib domicil|redpagos pagos factu|pago servicios bps|banco de prevision social", descripcion) ~ "impuestos",
                                            grepl("stm", descripcion) ~ "transporte",
                                            grepl("transferencia spi enviada|retiro red abitab", descripcion) ~ "transferencias / pagos en efectivo",
-                                           grepl("farmacia|clave 3|del conde original", descripcion) ~ "otros",
+                                           grepl("chacra|multiservice", descripcion) ~ "comestibles/fruta",
+                                           grepl("farmacia", descripcion) ~ "farmacia/higiene personal",
+                                           grepl("celular|antel", descripcion) ~ "datos antel",
+                                           grepl("retiro red redbrou", descripcion) ~ "retiro efectivo",
+                                           grepl("clave 3|del conde original", descripcion) ~ "otros",
                                            TRUE ~ "comida"))
 ```
 
 
-
 ## Visualizaciones
 
-### Monto total gastado en el mes
+### Monto total gastado en el mes `r unique(df$mes)`
 ```{r include=TRUE}
 kable(df %>% summarise(sum(monto)), caption = "Monto total del mes") %>% kable_styling(latex_options="HOLD_position")
 ```
 <br>
-  <br>
+<br>
   
-  ### Gastos menusales por categoría ordenado de mayor a menor
+### Gastos menusales por categoría ordenado de mayor a menor
 ```{r include=TRUE}
 # Suma por descripcion
 
@@ -130,19 +131,39 @@ df %>% group_by(categorias) %>% summarise(Monto = sum(monto)) %>% ggplot(aes(x =
 kable(df %>% select("Tipo de gasto"=descripcion, categorias, monto) %>% slice_max(monto, n=4), caption = "Los 4 gastos de mayor monto") %>% kable_styling(latex_options="HOLD_position")
 ```
 
+### Sub categoría
+
+```{r include=TRUE}
+# Suma por descripcion
+
+kable(df %>% group_by(sub_categoria) %>% summarise(monto = sum(monto)) %>%  mutate(Porcentaje = monto/sum(monto)*100) %>%  arrange(desc(monto)), caption = "Gastos mensuales por subcategorías") %>% kable_styling(latex_options="HOLD_position")
+```
+
+```{r include=TRUE}
+df %>% group_by(sub_categoria) %>% summarise(Monto = sum(monto)) %>% ggplot(aes(x = sub_categoria, y = Monto, fill = sub_categoria)) + geom_col() + 
+  theme(axis.text.x = element_text(angle = 90)) + labs(title = "Gasto por subcategoria de gasto", x="Monto", y="Tipo de Gasto") +   geom_text(aes(label=Monto), position=position_dodge(width=0.9), vjust=-0.10)
+```
+
 \newpage
 
-## Análisis acumulado (el análisis acumulado con RRAA del BROU comienza en julio)
+```{r}
+# Guardo en un rdata el mes
+
+
+```
+
+
+## Análisis acumulado (Comienza en Enero)
 
 ```{r}
 # cargo el df anual (a partir de junio se calcula con RRAA del BROU, por lo que se aumenta la precisión)
 
-load("gastos_2023.Rdata")
+#load("gastos_2024.Rdata")
 ```
 
 ```{r}
-# agrego el mes a gastos_2023
+# agrego el mes a gastos_2024
 
-rbind(df_2023, df)
+#rbind(df_2024, df)
 ```
 
